@@ -73,6 +73,13 @@ void kWayMergeSort(const typename PercentileStateTypes<LT>::GridType& grid, std:
                    CppType& senior_elm) {
     CppType minV = RunTimeTypeLimits<LT>::min_value();
     CppType maxV = RunTimeTypeLimits<LT>::max_value();
+
+    // infinity and -infinity are the actual max_value and min_value for double type
+    if constexpr (std::is_same_v<CppType, double>) {
+        minV = -std::numeric_limits<double>::infinity();
+        maxV = std::numeric_limits<double>::infinity();
+    }
+
     b.resize(k + 1);
     ls.resize(k);
     mp.resize(k);
@@ -104,8 +111,23 @@ void kWayMergeSort(const typename PercentileStateTypes<LT>::GridType& grid, std:
                 if (b[q] < b[ls[t]]) {
                     std::swap(q, ls[t]);
                 }
-            } else if (b[q] > b[ls[t]]) {
-                std::swap(q, ls[t]);
+                // If the current value for b[q] is infinity, we should swap q and ls[t], as ls[t] should never equal to
+                // k when initialization of the tournament tree is done, which will results into segmentation fault.
+                if constexpr (std::is_same_v<CppType, double>) {
+                    if (b[q] > 0 && std::isinf(b[q]) && ls[t] == k) {
+                        std::swap(q, ls[t]);
+                    }
+                }
+            } else {
+                if (b[q] > b[ls[t]]) {
+                    std::swap(q, ls[t]);
+                }
+                // We swap q and ls[t] for the case where b[q] equals to -infinity.
+                if constexpr (std::is_same_v<CppType, double>) {
+                    if (b[q] < 0 && std::isinf(b[q]) && ls[t] == k) {
+                        std::swap(q, ls[t]);
+                    }
+                }
             }
             t = t / 2;
         }
@@ -114,6 +136,15 @@ void kWayMergeSort(const typename PercentileStateTypes<LT>::GridType& grid, std:
 
     CppType tp = reverse ? minV : maxV;
     size_t cnt = 0;
+
+    // If all elements in the grid equals to maxV or minV, the program will not execute the following while loop,
+    // junior_elm and senior_elm will equal to default value, which returns incorrect result.
+    // e.g. maxV = inf, P10, P90 should return inf rather than 0
+    if (UNLIKELY(b[ls[0]] == tp)) {
+        junior_elm = b[ls[0]];
+        senior_elm = b[ls[0]];
+        return;
+    }
 
     while (b[ls[0]] != tp) {
         int q = ls[0];
@@ -165,6 +196,18 @@ ResultType calculateResult(CppType junior_elm, CppType senior_elm, double u, siz
         result._julian = junior_elm._julian + (u - (double)index) * (senior_elm._julian - junior_elm._julian);
     } else if constexpr (lt_is_arithmetic<LT>) {
         result = junior_elm + (u - (double)index) * (senior_elm - junior_elm);
+        // For the case where CppType = double, special care should be taken when dealing with -inf/inf
+        if (UNLIKELY(std::isnan(result))) {
+            if constexpr (std::is_same_v<CppType, double>) {
+                if (std::isinf(junior_elm) && std::isinf(senior_elm)) {
+                    if (junior_elm < 0 && senior_elm < 0) {
+                        result = -std::numeric_limits<double>::infinity();
+                    } else if (junior_elm > 0 && senior_elm > 0) {
+                        result = std::numeric_limits<double>::infinity();
+                    }
+                }
+            }
+        }
     } else {
         // won't go there if percentile_cont is registered correctly
         throw std::runtime_error("Invalid PrimitiveTypes: " + type_to_string(LT) + " for percentile_cont function");
@@ -216,6 +259,11 @@ public:
         memcpy(vec.data() + 1, data_ptr, items_size * sizeof(InputCppType));
         vec[0] = RunTimeTypeLimits<LT>::min_value();
         vec[vec.size() - 1] = RunTimeTypeLimits<LT>::max_value();
+
+        if constexpr (LT == LogicalType::TYPE_DOUBLE) {
+            vec[0] = -std::numeric_limits<double>::infinity();
+            vec[vec.size() - 1] = std::numeric_limits<double>::infinity();
+        }
 
         grid.emplace_back(std::move(vec));
         this->data(state).rate = rate;
